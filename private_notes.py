@@ -1,17 +1,14 @@
 import pickle
 import os # Example on crypto documentation imports this, so I do too. 
-from cryptography.hazmat.primitives import hashes, hmac
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives import hashes, hmac # Import the SHA256 hash, and the HMAC derived from it.
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes # Import the ciphers, algorithms and modes needed to perform AES.
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM # Import AES-GCM.
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC # Import the password generation function from the cryptography library.
 
 class PrivNotes:
-  MAX_NOTE_LEN = 2048; 
-  key = None; # Variable for storing the key. Value is generated in init.
-  hmacKey = None; # Key for doing hmac operations. Value is derived from the source key within init.
-  AESKey = None; # Key for doing AES operations. Value is derived from the source key within init.
-  newKey3 = None; # Key that currently does nothing. Value is derived from the source key within init.
+  MAX_NOTE_LEN = 2048; # The maximum length a note can be that is valid in the key value store.
   passwordSalt = os.urandom(16); # Generate a 16 byte (128 bit) salt for generating the key. The only true random value we are allowed.
+  
   """
   Constructor.
   Args:
@@ -28,19 +25,22 @@ class PrivNotes:
     self.kvs = {} # Initialize the key-value store to be empty.
     kdf = PBKDF2HMAC(algorithm = hashes.SHA256(), length = 32, salt = self.passwordSalt, iterations = 2000000) # Define the kdf algorithm by running SHA256 2 million times using the salt we generated.
     self.key = kdf.derive(bytes(password, 'ascii')) # Generate the key using the defined kdf algorithm.
-
-    self.HMACKey = self.runHMAC(self.key, "I love the number 37") # Generate new key from source key using HMAC. 
-    self.AESKey = self.runHMAC(self.key, "I HATE the number 37") # Attempt to generate new key using AES.
-    self.newKey3 = self.runHMAC(self.key, "I am ambivalent towards the number 37") # Attempt to generate new key using AES.
-
-    passwordHMAC = self.runHMAC(self.HMACKey, password) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
+    self.HMACKey = self.runHMAC(self.key, bytes("I love the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for HMAC operations. 
+    self.AESKey = self.runHMAC(self.key, bytes("I HATE the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES operations.
+    self.AESGCMKey = self.runHMAC(self.key, bytes("I am ambivalent towards the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES-GCM operations.
+    passwordHMAC = self.runHMAC(self.HMACKey, bytes(password, 'ascii')) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
+    PwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the title of the password. This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
 
     if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
-      self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data. Do this so we can access the password HMAC.
-      if passwordHMAC != self.get("passwordHMAC"): # Get the password HMAC from data. Check if it is equal to the supplied password's HMAC.
+      self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data, so we can look up the HMAC of the password in the kvs.
+      if PwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
+        self.getVal = self.kvs[hmacPwdTitle] # If the password title exists, set getVal to the password HMAC.
+      else:
+        self.getVal = None # If the password title does not exist, set getVal to None.
+      if passwordHMAC != self.getVal: # Check equality for the password HMAC in the kvs and the password HMAC calculated in init. If they don't match, password is invalid.
         raise ValueError("malformed serialized format"); # Return a ValueError if the password HMAC does not match.
     else: #Case for data not having a value, meaning this is a clean init
-      self.set("passwordHMAC", passwordHMAC) # Add the password HMAC to the data.
+      self.kvs[PwdTitleHMAC] = passwordHMAC # Add the password HMAC to the kvs, titled with the HMAC of the title of the password.
   
   """
   runHMAC(self, key, value)
@@ -49,7 +49,7 @@ class PrivNotes:
 
   Args:
     key : key value that we are running HMAC under.
-    value : string value to run HMAC on.
+    value : byte string value to run HMAC on.
 
   returns:
     hmacValue: the output after running HMAC
@@ -57,7 +57,7 @@ class PrivNotes:
   def runHMAC(self, key, value):
     #print("init value: {}".format(value)) # ** D E B U G ** Print the title to compare to the HMAC one. ** D E B U G **
     hmacFunc = hmac.HMAC(key, hashes.SHA256()) # Instantiate the HMAC function.
-    hmacFunc.update(bytes(value, 'ascii')) # Use the HMAC function on the title value.
+    hmacFunc.update(value) # Use the HMAC function on the title value.
     hmacValue = hmacFunc.finalize() # Output the HMAC title.
     #print("HMAC value: {}\n".format(hmacValue)) # ** D E B U G ** Print the HMAC title. ** D E B U G **
     return hmacValue # Return the finished HMAC output.
@@ -81,6 +81,17 @@ class PrivNotes:
     aesValue = encryptor.update(string) + encryptor.finalize() # Run AES on the string.
     #print("new key: {}".format(newKey))
     return aesValue # Return the finished AES output.
+
+  def AESGCMEncrypt(self, key, nonce, data, aad):
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, bytes(data, 'ascii'), aad)
+    return ciphertext
+
+  def AESGCMDecrypt(self, key, nonce, data, aad):
+    aesgcm = AESGCM(key)
+    text = aesgcm.decrypt(nonce, data, aad)
+    decodedText = text.decode('ascii')
+    return decodedText
 
   """
   runSHA256(self, string)
@@ -127,10 +138,13 @@ class PrivNotes:
       it exists and otherwise None
   """
   def get(self, title):
-
-    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
+    hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
-      return self.kvs[hmacTitle] # Return the note value corresponding to the HMAC'd title.
+      # print("Note before AES-GCM decrypt: {}".format(self.kvs[hmacTitle]))
+      hmacNote = self.runHMAC(self.HMACKey, self.kvs[hmacTitle])
+      note = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle)
+      # print("Note after AES-GCM: {} \n".format(note))
+      return note # Return the note value corresponding to the HMAC'd title.
     return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
 
   """
@@ -153,9 +167,13 @@ class PrivNotes:
   def set(self, title, note):
     if len(note) > self.MAX_NOTE_LEN: # Check the length of the note to make sure that it does not exceed the note length bounds.
       raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
-    
-    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
-    self.kvs[hmacTitle] = note # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
+
+    hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
+    # print("Note before AES-GCM: {}".format(note))
+    hmacNote = self.runHMAC(self.HMACKey, bytes(note, 'ascii'))
+    GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, note, hmacTitle)
+    # print("Note after AES-GCM: {} \n".format(GCMnote))
+    self.kvs[hmacTitle] = GCMnote # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
   """
   remove(self, title)
@@ -171,7 +189,7 @@ class PrivNotes:
   """
   def remove(self, title):
 
-    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
+    hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
       return True # Return true, denoting that the title was successfully removed.
