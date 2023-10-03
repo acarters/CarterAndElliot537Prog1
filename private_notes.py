@@ -2,14 +2,15 @@ import pickle
 import os # Example on crypto documentation imports this, so I do too. 
 from cryptography.hazmat.primitives import hashes, hmac
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC # Import the password generation function from the cryptography library.
 
 class PrivNotes:
   MAX_NOTE_LEN = 2048; 
   key = None; # Variable for storing the key. Value is generated in init.
-  hmacKey = None;
-  AESKey = None;
-  newKey3 = None;
+  hmacKey = None; # Key for doing hmac operations. Value is derived from the source key within init.
+  AESKey = None; # Key for doing AES operations. Value is derived from the source key within init.
+  newKey3 = None; # Key that currently does nothing. Value is derived from the source key within init.
   passwordSalt = os.urandom(16); # Generate a 16 byte (128 bit) salt for generating the key. The only true random value we are allowed.
   """
   Constructor.
@@ -28,20 +29,18 @@ class PrivNotes:
     kdf = PBKDF2HMAC(algorithm = hashes.SHA256(), length = 32, salt = self.passwordSalt, iterations = 2000000) # Define the kdf algorithm by running SHA256 2 million times using the salt we generated.
     self.key = kdf.derive(bytes(password, 'ascii')) # Generate the key using the defined kdf algorithm.
 
-    self.hmacKey = self.runHMAC(self.key, "I love the number 37") # Attempt to generate new key using AES. 
+    self.HMACKey = self.runHMAC(self.key, "I love the number 37") # Generate new key from source key using HMAC. 
     self.AESKey = self.runHMAC(self.key, "I HATE the number 37") # Attempt to generate new key using AES.
     self.newKey3 = self.runHMAC(self.key, "I am ambivalent towards the number 37") # Attempt to generate new key using AES.
 
-    passwordHash = self.runSHA256(password) # run SHA256 hash on password.
+    passwordHMAC = self.runHMAC(self.HMACKey, password) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
 
-    # If data is blank, password cannot be wrong. If data is not blank, the password needs to be equivalent to the one used in data.
-    
-    if data is not None: # Case for data having a value, meaning we are loading rather than starting a new init.
-      self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data. Do this so we can access the password.
-      if passwordHash != self.get("passwordHash"): # Get the password from data. Check if it is equal to the supplied password.
-        raise ValueError("malformed serialized format"); # Return a ValueError if the password does not match.
+    if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
+      self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data. Do this so we can access the password HMAC.
+      if passwordHMAC != self.get("passwordHMAC"): # Get the password HMAC from data. Check if it is equal to the supplied password's HMAC.
+        raise ValueError("malformed serialized format"); # Return a ValueError if the password HMAC does not match.
     else: #Case for data not having a value, meaning this is a clean init
-      self.set("passwordHash", passwordHash) # Add the password to the data.
+      self.set("passwordHMAC", passwordHMAC) # Add the password HMAC to the data.
   
   """
   runHMAC(self, key, value)
@@ -94,11 +93,11 @@ class PrivNotes:
     hashValue: the output after hashing,
   """
   def runSHA256(self, string):
-    sha256 = hashes.Hash(hashes.SHA256())
-    sha256.update(bytes(string, 'ascii'))
-    hashValue = sha256.finalize()
-    print("hash value: {}".format(hashValue))
-    return hashValue
+    sha256 = hashes.Hash(hashes.SHA256()) # Initialize the hash as a SHA256 hash function.
+    sha256.update(bytes(string, 'ascii')) # Hash the string using the hash function.
+    hashValue = sha256.finalize() # generate the hashed value.
+    #print("hash value: {}".format(hashValue)) 
+    return hashValue # Return the hash value.
 
   """
   dump(self)
@@ -113,7 +112,7 @@ class PrivNotes:
       against rollback attacks (up to 32 characters in length)
   """
   def dump(self):
-    return pickle.dumps(self.kvs).hex(), ''
+    return pickle.dumps(self.kvs).hex(), '' # Use the pickle function to serialize our data and return it. Should also return the checksum but not yet.
 
   """
   get(self, title)
@@ -129,10 +128,10 @@ class PrivNotes:
   """
   def get(self, title):
 
-    hmacTitle = self.runHMAC(self.hmacKey, title)
-    if hmacTitle in self.kvs:
-      return self.kvs[hmacTitle]
-    return None
+    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
+    if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
+      return self.kvs[hmacTitle] # Return the note value corresponding to the HMAC'd title.
+    return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
 
   """
   set(self, title, note)
@@ -152,11 +151,11 @@ class PrivNotes:
     ValueError : if note length exceeds the maximum
   """
   def set(self, title, note):
-    if len(note) > self.MAX_NOTE_LEN:
-      raise ValueError('Maximum note length exceeded')
+    if len(note) > self.MAX_NOTE_LEN: # Check the length of the note to make sure that it does not exceed the note length bounds.
+      raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
     
-    hmacTitle = self.runHMAC(self.hmacKey, title)
-    self.kvs[hmacTitle] = note
+    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
+    self.kvs[hmacTitle] = note # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
   """
   remove(self, title)
@@ -172,9 +171,9 @@ class PrivNotes:
   """
   def remove(self, title):
 
-    hmacTitle = self.runHMAC(self.hmacKey, title)
-    if hmacTitle in self.kvs:
-      del self.kvs[hmacTitle]
-      return True
+    hmacTitle = self.runHMAC(self.HMACKey, title) # Run HMAC on the title.
+    if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
+      del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
+      return True # Return true, denoting that the title was successfully removed.
 
-    return False
+    return False # Otherwise return false, denoting that the title was not found in the kvs.
