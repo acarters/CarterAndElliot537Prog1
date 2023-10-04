@@ -31,7 +31,10 @@ class PrivNotes:
     self.AESGCMKey = self.runHMAC(self.key, bytes("I am ambivalent towards the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES-GCM operations.
     passwordHMAC = self.runHMAC(self.HMACKey, bytes(password, 'ascii')) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
     pwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the title of the password. This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
-
+    if checksum is not None: # Checksum can only be checked if it's supplied. Otherwise, protection against rollback is not guaranteed.
+      dataHash = self.runSHA256(data) # Derive the checksum by hashing the serialized data.
+      if dataHash != checksum: # Handle the case where the hash of the data does not match the dumped checksum, implying that data has been tampered with.
+        raise ValueError("malformed serialized format"); # Return a ValueError if the checksum does not match.
     if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
       self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data, so we can look up the HMAC of the password in the kvs.
       if pwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
@@ -188,7 +191,9 @@ class PrivNotes:
       against rollback attacks (up to 32 characters in length)
   """
   def dump(self):
-    return pickle.dumps(self.kvs).hex(), '' # Use the pickle function to serialize our data and return it. Should also return the checksum but not yet.
+    data = pickle.dumps(self.kvs).hex() # Generate a serialized version of the data using the pickle function.
+    checksum = self.runSHA256(data) # Hash the serialized data using SHA256, define this as our checksum.
+    return data, checksum # Use the pickle function to serialize our data and return it. Also return the checksum.
 
   """
   get(self, title)
