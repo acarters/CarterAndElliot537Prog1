@@ -4,6 +4,7 @@ from cryptography.hazmat.primitives import hashes, hmac # Import the SHA256 hash
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes # Import the ciphers, algorithms and modes needed to perform AES.
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM # Import AES-GCM.
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC # Import the password generation function from the cryptography library.
+from cryptography.hazmat.primitives import padding
 
 class PrivNotes:
   MAX_NOTE_LEN = 2048; # The maximum length a note can be that is valid in the key value store.
@@ -55,11 +56,9 @@ class PrivNotes:
     hmacValue: the output after running HMAC
   """
   def runHMAC(self, key, value):
-    #print("init value: {}".format(value)) # ** D E B U G ** Print the title to compare to the HMAC one. ** D E B U G **
     hmacFunc = hmac.HMAC(key, hashes.SHA256()) # Instantiate the HMAC function.
     hmacFunc.update(value) # Use the HMAC function on the title value.
     hmacValue = hmacFunc.finalize() # Output the HMAC title.
-    #print("HMAC value: {}\n".format(hmacValue)) # ** D E B U G ** Print the HMAC title. ** D E B U G **
     return hmacValue # Return the finished HMAC output.
 
   """
@@ -79,7 +78,6 @@ class PrivNotes:
     cipher = Cipher(algorithms.AES(key), modes.CTR(iv)) # Initialize the cipher, defining it as AES running on CTR mode.
     encryptor = cipher.encryptor() # Create the encryptor from the cipher.
     aesValue = encryptor.update(string) + encryptor.finalize() # Run AES on the string.
-    #print("new key: {}".format(newKey))
     return aesValue # Return the finished AES output.
 
   """
@@ -98,7 +96,8 @@ class PrivNotes:
   """
   def AESGCMEncrypt(self, key, nonce, text, aad):
     aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
-    ciphertext = aesgcm.encrypt(nonce, bytes(text, 'ascii'), aad) # Encrypt the data using the given nonce and additional data.
+    paddedData = self.pad(bytes(text, 'ascii')) # Apply PKCS7 padding to the text, ensuring that all ciphertexts are the same length.
+    ciphertext = aesgcm.encrypt(nonce, paddedData, aad) # Encrypt the data using the given nonce and additional data.
     return ciphertext # Return the resulting ciphertext from encrypting under AES-GCM.
 
   """
@@ -118,8 +117,46 @@ class PrivNotes:
   def AESGCMDecrypt(self, key, nonce, ciphertext, aad):
     aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
     text = aesgcm.decrypt(nonce, ciphertext, aad) # Decrypt the data using the given nonce and additional data.
-    decodedText = text.decode('ascii') # Decode the text, converting to an ascii string.
+    unpaddedText = self.unpad(text) # Apply PKCS7 unpadding to the text, removing the padding.
+    decodedText = unpaddedText.decode('ascii') # Decode the text, converting to an ascii string.
     return decodedText # Return the ascii string plaintext.
+
+
+  """
+  pad (self, unpaddedData)
+
+  Helper method that pads a byte array with PKCS7 padding.
+  
+  Args:
+    unpaddedData : Byte array without padding, to perform PKCS7 padding on.
+
+  returns:
+    paddedData: The byte array, with PKCS7 padding applied.
+  """
+  def pad (self, unpaddedData):
+    padder = padding.PKCS7(2000).padder() # Initialize the padder as PKCS7, with a max block size of 2K bytes.
+    padderUpdate = padder.update(unpaddedData) # Update the padder by supplying it the unpadded byte array.
+    paddedData = padder.finalize() # Finalize the padding operation, giving us our padded data.
+    #print("paddedData: {}".format(paddedData)) # * D E B U G * print the padded data.
+    return paddedData # Return the padded data.
+  
+  """
+  unpad (self, unpaddedData)
+
+  Helper method that unpads a byte array with PKCS7 padding.
+  
+  Args:
+    paddedData : Byte array with padding, to perform PKCS7 unpadding on.
+
+  returns:
+    unpaddedData: The padded byte array, with PKCS7 unpadding applied.
+  """
+  def unpad (self, paddedData):
+    unpadder = padding.PKCS7(2000).unpadder() # Initialize the unpadder as PKCS7, with a max block size of 2K bytes.
+    unpadderUpdate = unpadder.update(paddedData) # Update the unpadder by supplying it the padded byte array.
+    unpaddedData = unpadder.finalize() # Finalize the unpadding operation, giving us our unpadded data.
+    #print("unpaddedData: {}".format(unpaddedData)) # * D E B U G * print the unpadded data.
+    return unpaddedData # Return the unpadded data.
 
   """
   runSHA256(self, string)
@@ -168,9 +205,7 @@ class PrivNotes:
   def get(self, title):
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
-      # print("Note before AES-GCM decrypt: {}".format(self.kvs[hmacTitle]))
       note = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.
-      # print("Note after AES-GCM: {} \n".format(note))
       return note # Return the note value corresponding to the HMAC'd title.
     return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
 
@@ -194,11 +229,9 @@ class PrivNotes:
   def set(self, title, note):
     if len(note) > self.MAX_NOTE_LEN: # Check the length of the note to make sure that it does not exceed the note length bounds.
       raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
-
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
-    # print("Note before AES-GCM: {}".format(note))
     GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, note, hmacTitle) # Encrypt the note under AES-GCM. Use the HMAC'd title as the nonce (since it is non-repeating) and the additional data (to protect against swap attacks)
-    # print("Note after AES-GCM: {} \n".format(GCMnote))
+    # print("AES-GCM Length: {} \n".format(len(GCMnote))) * D E B U G * Used to check the length of the ciphertexts, to ensure that the padding works.
     self.kvs[hmacTitle] = GCMnote # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
   """
