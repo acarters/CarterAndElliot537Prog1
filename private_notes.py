@@ -29,18 +29,18 @@ class PrivNotes:
     self.AESKey = self.runHMAC(self.key, bytes("I HATE the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES operations.
     self.AESGCMKey = self.runHMAC(self.key, bytes("I am ambivalent towards the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES-GCM operations.
     passwordHMAC = self.runHMAC(self.HMACKey, bytes(password, 'ascii')) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
-    PwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the title of the password. This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
+    pwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the title of the password. This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
 
     if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
       self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data, so we can look up the HMAC of the password in the kvs.
-      if PwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
-        self.getVal = self.kvs[hmacPwdTitle] # If the password title exists, set getVal to the password HMAC.
+      if pwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
+        self.getVal = self.kvs[pwdTitleHMAC] # If the password title exists, set getVal to the password HMAC.
       else:
         self.getVal = None # If the password title does not exist, set getVal to None.
       if passwordHMAC != self.getVal: # Check equality for the password HMAC in the kvs and the password HMAC calculated in init. If they don't match, password is invalid.
         raise ValueError("malformed serialized format"); # Return a ValueError if the password HMAC does not match.
     else: #Case for data not having a value, meaning this is a clean init
-      self.kvs[PwdTitleHMAC] = passwordHMAC # Add the password HMAC to the kvs, titled with the HMAC of the title of the password.
+      self.kvs[pwdTitleHMAC] = passwordHMAC # Add the password HMAC to the kvs, titled with the HMAC of the title of the password.
   
   """
   runHMAC(self, key, value)
@@ -82,16 +82,44 @@ class PrivNotes:
     #print("new key: {}".format(newKey))
     return aesValue # Return the finished AES output.
 
-  def AESGCMEncrypt(self, key, nonce, data, aad):
-    aesgcm = AESGCM(key)
-    ciphertext = aesgcm.encrypt(nonce, bytes(data, 'ascii'), aad)
-    return ciphertext
+  """
+  AESGCMEncrypt(self, key, nonce, text, aad)
 
-  def AESGCMDecrypt(self, key, nonce, data, aad):
-    aesgcm = AESGCM(key)
-    text = aesgcm.decrypt(nonce, data, aad)
-    decodedText = text.decode('ascii')
-    return decodedText
+  Encrypt under AES-GCM paradigm, returning a ciphertext.
+  
+  Args:
+    key : key value that we are running AES-GCM under.
+    nonce : Arbitrary but non-repeated value for the algorithm to use.
+    text : The data that we are encrypting.
+    aad : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
+
+  returns:
+    ciphertext: the output after running AES-GCM
+  """
+  def AESGCMEncrypt(self, key, nonce, text, aad):
+    aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
+    ciphertext = aesgcm.encrypt(nonce, bytes(text, 'ascii'), aad) # Encrypt the data using the given nonce and additional data.
+    return ciphertext # Return the resulting ciphertext from encrypting under AES-GCM.
+
+  """
+  AESGCMDecrypt(self, key, nonce, ciphertext, aad)
+
+  Decrypt a ciphertext under AES-GCM paradigm, returning a ciphertext.
+  
+  Args:
+    key : key value that we are running AES-GCM under.
+    nonce : Arbitrary but non-repeated value for the algorithm to use.
+    ciphertext : The data that we are encrypting.
+    aad : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
+
+  returns:
+    decodedText: the output after running AES-GCM, converted to an ascii string.
+  """
+  def AESGCMDecrypt(self, key, nonce, ciphertext, aad):
+    aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
+    text = aesgcm.decrypt(nonce, ciphertext, aad) # Decrypt the data using the given nonce and additional data.
+    decodedText = text.decode('ascii') # Decode the text, converting to an ascii string.
+    return decodedText # Return the ascii string plaintext.
 
   """
   runSHA256(self, string)
@@ -141,8 +169,7 @@ class PrivNotes:
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       # print("Note before AES-GCM decrypt: {}".format(self.kvs[hmacTitle]))
-      hmacNote = self.runHMAC(self.HMACKey, self.kvs[hmacTitle])
-      note = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle)
+      note = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.
       # print("Note after AES-GCM: {} \n".format(note))
       return note # Return the note value corresponding to the HMAC'd title.
     return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
@@ -170,8 +197,7 @@ class PrivNotes:
 
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     # print("Note before AES-GCM: {}".format(note))
-    hmacNote = self.runHMAC(self.HMACKey, bytes(note, 'ascii'))
-    GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, note, hmacTitle)
+    GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, note, hmacTitle) # Encrypt the note under AES-GCM. Use the HMAC'd title as the nonce (since it is non-repeating) and the additional data (to protect against swap attacks)
     # print("Note after AES-GCM: {} \n".format(GCMnote))
     self.kvs[hmacTitle] = GCMnote # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
