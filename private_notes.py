@@ -121,7 +121,6 @@ class PrivNotes:
     text = aesgcm.decrypt(nonce, ciphertext, aad) # Decrypt the data using the given nonce and additional data.
     return text # Return the ascii string plaintext.
 
-
   """
 
   """
@@ -190,7 +189,7 @@ class PrivNotes:
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       paddedNote = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.  
       
-      lengthTitle = self.runSHA256(hmacTitle)
+      lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
       byteLength = self.AESGCMDecrypt(self.AESGCMKey, lengthTitle, self.kvs[lengthTitle], None)
       
       length = int.from_bytes(byteLength, 'little')
@@ -221,7 +220,7 @@ class PrivNotes:
       raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
 
-    lengthTitle = self.runSHA256(hmacTitle)
+    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
 
     byteData = bytes(note, 'ascii')
     byteLength = (len(byteData)).to_bytes(2048, 'little')
@@ -249,7 +248,7 @@ class PrivNotes:
   """
   def remove(self, title):
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
-    lengthTitle = self.runSHA256(hmacTitle)
+    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
       del self.kvs[lengthTitle] # Delete the key value pair corresponding to the HMAC'd title.
