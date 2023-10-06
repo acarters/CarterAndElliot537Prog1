@@ -38,13 +38,23 @@ class PrivNotes:
     if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
       self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data, so we can look up the HMAC of the password in the kvs.
       if pwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
-        self.getVal = self.kvs[pwdTitleHMAC] # If the password title exists, set getVal to the password HMAC.
+        encryptedVal = self.kvs[pwdTitleHMAC]
+        paddedVal = self.AESGCMDecrypt(self.AESGCMKey, pwdTitleHMAC, encryptedVal, None) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.  
+        self.getVal = self.unpad(paddedVal)
       else:
         self.getVal = None # If the password title does not exist, set getVal to None.
+      print("password HMAC: {}".format(passwordHMAC))
+      print("self.getVal: {}".format(self.getVal))
       if passwordHMAC != self.getVal: # Check equality for the password HMAC in the kvs and the password HMAC calculated in init. If they don't match, password is invalid.
         raise ValueError("malformed serialized format"); # Return a ValueError if the password HMAC does not match.
     else: #Case for data not having a value, meaning this is a clean init
-      self.kvs[pwdTitleHMAC] = passwordHMAC # Add the password HMAC to the kvs, titled with the HMAC of the title of the password.
+      paddedPwdHMAC = self.pad(passwordHMAC)
+      pwdGCM = self.AESGCMEncrypt(self.AESGCMKey, pwdTitleHMAC, paddedPwdHMAC, None) # Encrypt the note under AES-GCM. Use the HMAC'd title as the nonce (since it is non-repeating) and the additional data (to protect against swap attacks)
+      print("Password Title Length: {}".format(len(pwdTitleHMAC)))
+      print("Password HMAC Note Length: {} \n".format(len(pwdGCM)))
+      self.kvs[pwdTitleHMAC] = pwdGCM # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
+
+      
   
   """
   runHMAC(self, key, value)
@@ -125,6 +135,7 @@ class PrivNotes:
 
   """
   def pad (self, unpaddedData):
+<<<<<<< Updated upstream
     byteData = bytes(unpaddedData, 'ascii') # Convert the string data to a byte array.
     length = len(byteData) # Get the length of the byte array before padding.
     length_bytes = length.to_bytes(11,"little") # Convert the length of the string data to a byte array
@@ -132,6 +143,15 @@ class PrivNotes:
     byteData += bytes(2048 - modValue) # Add enough zero bytes at the end to reach our desired size.
     byteDate += length_bytes # Add the bytes holding the length to the end
     return byteData # Return the padded byte data.
+=======
+    length = len(unpaddedData) # Get the length of the byte array before padding.
+    print("length: {}".format(length))
+    length_bytes = length.to_bytes(11,"little") # Convert the length of the string data to a byte array
+    modValue = length % 2048 # Calculate the mod of our length and the desired size (2048)
+    unpaddedData += bytes(2048 - modValue) # Add enough zero bytes at the end to reach our desired size.
+    unpaddedData += length_bytes # Add the bytes holding the length to the end
+    return unpaddedData # Return the padded byte data.
+>>>>>>> Stashed changes
 
   """
 
@@ -139,7 +159,11 @@ class PrivNotes:
   def unpad (self, paddedData):
     length_bytes = paddedData[2048:2058] # Carve out the length part of byte string
     length = int.from_bytes(length_bytes, "little") # Convert bytes to an integer length
+<<<<<<< Updated upstream
     return unpad_helper(self,paddedData[0:2047],length) # Use this length to unpad the rest of the byte string
+=======
+    return self.unpad_helper(paddedData[0:2047],length) # Use this length to unpad the rest of the byte string
+>>>>>>> Stashed changes
 
   def unpad_helper (self, paddedData, length):
     byteData = paddedData[0:length] # Slice the padding off the end, according to the length value provided to the function.
@@ -230,15 +254,20 @@ class PrivNotes:
     #lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
 
     byteData = bytes(note, 'ascii')
+<<<<<<< Updated upstream
     #byteLength = (len(byteData)).to_bytes(2048, 'little')
 
     #GCMlength = self.AESGCMEncrypt(self.AESGCMKey, lengthTitle, byteLength, None)
     #self.kvs[lengthTitle] = GCMlength
 
     paddedNote = self.pad(note)
+=======
+    paddedNote = self.pad(byteData)
+>>>>>>> Stashed changes
 
     GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, paddedNote, hmacTitle) # Encrypt the note under AES-GCM. Use the HMAC'd title as the nonce (since it is non-repeating) and the additional data (to protect against swap attacks)
-    # print("AES-GCM Length: {} \n".format(len(GCMnote))) * D E B U G * Used to check the length of the ciphertexts, to ensure that the padding works.
+    print("AES-GCM Title Length: {}".format(len(hmacTitle)))
+    print("AES-GCM Length: {} \n".format(len(GCMnote))) # * D E B U G * Used to check the length of the ciphertexts, to ensure that the padding works.
     self.kvs[hmacTitle] = GCMnote # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
   """
