@@ -253,5 +253,4 @@ class PrivNotes:
       del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
       del self.kvs[lengthTitle] # Delete the key value pair corresponding to the HMAC'd title.
       return True # Return true, denoting that the title was successfully removed.
-
     return False # Otherwise return false, denoting that the title was not found in the kvs.
