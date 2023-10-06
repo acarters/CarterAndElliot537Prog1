@@ -127,14 +127,21 @@ class PrivNotes:
   def pad (self, unpaddedData):
     byteData = bytes(unpaddedData, 'ascii') # Convert the string data to a byte array.
     length = len(byteData) # Get the length of the byte array before padding.
+    length_bytes = length.to_bytes(11,"little") # Convert the length of the string data to a byte array
     modValue = length % 2048 # Calculate the mod of our length and the desired size (2048)
     byteData += bytes(2048 - modValue) # Add enough zero bytes at the end to reach our desired size.
+    byteDate += length_bytes # Add the bytes holding the length to the end
     return byteData # Return the padded byte data.
 
   """
 
   """
-  def unpad (self, paddedData, length):
+  def unpad (self, paddedData):
+    length_bytes = paddedData[2048:2058] # Carve out the length part of byte string
+    length = int.from_bytes(length_bytes, "little") # Convert bytes to an integer length
+    return unpad_helper(self,paddedData[0:2047],length) # Use this length to unpad the rest of the byte string
+
+  def unpad_helper (self, paddedData, length):
     byteData = paddedData[0:length] # Slice the padding off the end, according to the length value provided to the function.
     return byteData # Return the sliced bytestring.
 
@@ -189,11 +196,11 @@ class PrivNotes:
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       paddedNote = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.  
       
-      lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
-      byteLength = self.AESGCMDecrypt(self.AESGCMKey, lengthTitle, self.kvs[lengthTitle], None)
+      #lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
+      #byteLength = self.AESGCMDecrypt(self.AESGCMKey, lengthTitle, self.kvs[lengthTitle], None)
       
-      length = int.from_bytes(byteLength, 'little')
-      note = self.unpad(paddedNote, length)
+      #length = int.from_bytes(byteLength, 'little')
+      note = self.unpad(paddedNote)
       noteString = note.decode('ascii')
       return noteString # Return the note value corresponding to the HMAC'd title.
     return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
@@ -220,13 +227,13 @@ class PrivNotes:
       raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
 
-    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
+    #lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
 
     byteData = bytes(note, 'ascii')
-    byteLength = (len(byteData)).to_bytes(2048, 'little')
+    #byteLength = (len(byteData)).to_bytes(2048, 'little')
 
-    GCMlength = self.AESGCMEncrypt(self.AESGCMKey, lengthTitle, byteLength, None)
-    self.kvs[lengthTitle] = GCMlength
+    #GCMlength = self.AESGCMEncrypt(self.AESGCMKey, lengthTitle, byteLength, None)
+    #self.kvs[lengthTitle] = GCMlength
 
     paddedNote = self.pad(note)
 
@@ -248,10 +255,10 @@ class PrivNotes:
   """
   def remove(self, title):
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
-    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
+    #lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
-      del self.kvs[lengthTitle] # Delete the key value pair corresponding to the HMAC'd title.
+      #del self.kvs[lengthTitle] # Delete the key value pair corresponding to the HMAC'd title.
       return True # Return true, denoting that the title was successfully removed.
 
     return False # Otherwise return false, denoting that the title was not found in the kvs.
