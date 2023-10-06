@@ -27,10 +27,9 @@ class PrivNotes:
     kdf = PBKDF2HMAC(algorithm = hashes.SHA256(), length = 32, salt = self.passwordSalt, iterations = 2000000) # Define the kdf algorithm by running SHA256 2 million times using the salt we generated.
     self.key = kdf.derive(bytes(password, 'ascii')) # Generate the key using the defined kdf algorithm.
     self.HMACKey = self.runHMAC(self.key, bytes("I love the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for HMAC operations. 
-    self.AESKey = self.runHMAC(self.key, bytes("I HATE the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES operations.
-    self.AESGCMKey = self.runHMAC(self.key, bytes("I am ambivalent towards the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES-GCM operations.
+    self.AESGCMKey = self.runHMAC(self.key, bytes("I HATE the number 37", 'ascii')) # Generate new key from source key using HMAC. This key is for AES-GCM operations.
     passwordHMAC = self.runHMAC(self.HMACKey, bytes(password, 'ascii')) # run HMAC on the password. This output is collision-resistant, pseudo-random, and irreversible, making it perfect for verifying passwords without exposing the password.
-    pwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the title of the password. This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
+    pwdTitleHMAC = self.runHMAC(self.HMACKey, bytes("passwordHMAC", 'ascii')) #run HMAC on the string "passwordHMAC". This is to match the formatting of the rest of the tags. "passwordHMAC" is an arbitrary string.
     if checksum is not None: # Checksum can only be checked if it's supplied. Otherwise, protection against rollback is not guaranteed.
       dataHash = self.runSHA256(bytes(data, 'ascii')) # Derive the checksum by hashing the serialized data.
       if dataHash != checksum: # Handle the case where the hash of the data does not match the dumped checksum, implying that data has been tampered with.
@@ -38,13 +37,17 @@ class PrivNotes:
     if data is not None: # Case for data having a value, meaning we are loading from disk rather than starting a new init.
       self.kvs = pickle.loads(bytes.fromhex(data)) # Load the data, so we can look up the HMAC of the password in the kvs.
       if pwdTitleHMAC in self.kvs: # Check to see if the password title exists in the kvs. This handles an error when looking up an invalid tag.
-        self.getVal = self.kvs[pwdTitleHMAC] # If the password title exists, set getVal to the password HMAC.
-      else:
+        encryptedVal = self.kvs[pwdTitleHMAC] # get the padded, encrypted version of the password HMAC from the kvs.
+        paddedVal = self.AESGCMDecrypt(self.AESGCMKey, pwdTitleHMAC, encryptedVal, pwdTitleHMAC) # Decrypt the value, giving us a padded version of the password HMAC. 
+        self.getVal = self.unpad(paddedVal) # Unpad the value, giving us the password HMAC.
+      else: #Handle the case where the password title does not exist.
         self.getVal = None # If the password title does not exist, set getVal to None.
       if passwordHMAC != self.getVal: # Check equality for the password HMAC in the kvs and the password HMAC calculated in init. If they don't match, password is invalid.
         raise ValueError("malformed serialized format"); # Return a ValueError if the password HMAC does not match.
     else: #Case for data not having a value, meaning this is a clean init
-      self.kvs[pwdTitleHMAC] = passwordHMAC # Add the password HMAC to the kvs, titled with the HMAC of the title of the password.
+      paddedPwdHMAC = self.pad(passwordHMAC) # Pad the value of the password HMAC, ensuring that the length matches the length of all other notes in the kvs.
+      pwdGCM = self.AESGCMEncrypt(self.AESGCMKey, pwdTitleHMAC, paddedPwdHMAC, pwdTitleHMAC) # Encrypt the password under AES-GCM.
+      self.kvs[pwdTitleHMAC] = pwdGCM # Add a new key value pair to the kvs, using the title and the padded, encrypted version of the password.
   
   """
   runHMAC(self, key, value)
@@ -52,8 +55,8 @@ class PrivNotes:
   Helper method that runs HMAC for you.
 
   Args:
-    key : key value that we are running HMAC under.
-    value : byte string value to run HMAC on.
+    key (byte array) : key value that we are running HMAC under.
+    value (byte array) : byte string value to run HMAC on.
 
   returns:
     hmacValue: the output after running HMAC
@@ -65,37 +68,18 @@ class PrivNotes:
     return hmacValue # Return the finished HMAC output.
 
   """
-  runAES(self, key, iv, string)
-
-  Helper method that runs AES for you.
-  
-  Args:
-    key : key value that we are running AES under.
-    iv : the nonce.
-    string : string value to run AES on.
-
-  returns:
-    aesValue: the output after running AES
-  """
-  def runAES(self, key, iv, string):
-    cipher = Cipher(algorithms.AES(key), modes.CTR(iv)) # Initialize the cipher, defining it as AES running on CTR mode.
-    encryptor = cipher.encryptor() # Create the encryptor from the cipher.
-    aesValue = encryptor.update(string) + encryptor.finalize() # Run AES on the string.
-    return aesValue # Return the finished AES output.
-
-  """
   AESGCMEncrypt(self, key, nonce, text, aad)
 
   Encrypt under AES-GCM paradigm, returning a ciphertext.
   
   Args:
-    key : key value that we are running AES-GCM under.
-    nonce : Arbitrary but non-repeated value for the algorithm to use.
-    text : The data that we are encrypting.
-    aad : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
+    key (byte array) : key value that we are running AES-GCM under.
+    nonce (byte array) : Arbitrary but non-repeated value for the algorithm to use.
+    text (byte array) : The data that we are encrypting.
+    aad (byte array) : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
 
   returns:
-    ciphertext: the output after running AES-GCM
+    ciphertext (byte array) : the output after running AES-GCM
   """
   def AESGCMEncrypt(self, key, nonce, paddedData, aad):
     aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
@@ -108,13 +92,13 @@ class PrivNotes:
   Decrypt a ciphertext under AES-GCM paradigm, returning a plain text.
   
   Args:
-    key : key value that we are running AES-GCM under.
-    nonce : Arbitrary but non-repeated value for the algorithm to use.
-    ciphertext : The data that we are encrypting.
-    aad : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
+    key (byte array) : key value that we are running AES-GCM under.
+    nonce (byte array) : Arbitrary but non-repeated value for the algorithm to use.
+    ciphertext (byte array) : The data that we are encrypting.
+    aad (byte array) : Additional data that should be checked for correctness upon decryption. Should help prevent tampering/swap attacks.
 
   Returns:
-    decodedText: the output after running AES-GCM, converted to an ascii string.
+    decodedText (byte array) : the output after running AES-GCM.
   """
   def AESGCMDecrypt(self, key, nonce, ciphertext, aad):
     aesgcm = AESGCM(key) # Initialize AES-GCM under our given key.
@@ -122,19 +106,41 @@ class PrivNotes:
     return text # Return the ascii string plaintext.
 
   """
+  pad (self, unpaddedData)
 
+  Add padding to the data, making sure all notes are 2048 bytes. Additionally, append the length of the original data to the output.
+
+  Args:
+    data (byte array) : the original, unpadded data that we will pad.
+
+  Returns:
+    data (byte array) : the original data, with padding and length appended to it. 
   """
-  def pad (self, unpaddedData):
-    byteData = bytes(unpaddedData, 'ascii') # Convert the string data to a byte array.
-    length = len(byteData) # Get the length of the byte array before padding.
+  def pad (self, data):
+    length = len(data) # Get the length of the byte array before padding.
+    length_bytes = length.to_bytes(11,"little") # Convert the length of the string data to a byte array
     modValue = length % 2048 # Calculate the mod of our length and the desired size (2048)
-    byteData += bytes(2048 - modValue) # Add enough zero bytes at the end to reach our desired size.
-    return byteData # Return the padded byte data.
+    data += bytes(2048 - modValue) # Add enough zero bytes at the end to reach our desired size.
+    data += length_bytes # Add the bytes holding the length to the end
+    return data # Return the padded byte data.
 
   """
+  unpad (self, unpaddedData)
 
+  Remove padding from the data, reverting the data to the original length.
+
+  Args:
+    data (byte array) : the padded data that we will unpad.
+
+  Returns:
+    data (byte array) : the original data, with padding and length removed. 
   """
-  def unpad (self, paddedData, length):
+  def unpad (self, paddedData):
+    length_bytes = paddedData[2048:2058] # Carve out the length part of byte string
+    length = int.from_bytes(length_bytes, "little") # Convert bytes to an integer length
+    return self.unpad_helper(paddedData[0:2047],length) # Use this length to unpad the rest of the byte string
+
+  def unpad_helper (self, paddedData, length):
     byteData = paddedData[0:length] # Slice the padding off the end, according to the length value provided to the function.
     return byteData # Return the sliced bytestring.
 
@@ -144,10 +150,10 @@ class PrivNotes:
   Helper method that runs SHA256 hashing for you.
   
   Args:
-    byteArray : byte array value to hash.
+    byteArray (byte array) : byte array value to hash.
 
   Returns:
-    hashValue: the output after hashing,
+    hashValue (byte array) : the output after hashing,
   """
   def runSHA256(self, byteArray):
     sha256 = hashes.Hash(hashes.SHA256()) # Initialize the hash as a SHA256 hash function.
@@ -188,13 +194,8 @@ class PrivNotes:
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       paddedNote = self.AESGCMDecrypt(self.AESGCMKey, hmacTitle, self.kvs[hmacTitle], hmacTitle) # Decrypt the value corresponding to the HMAC of the title, returning a plaintext value.  
-      
-      lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
-      byteLength = self.AESGCMDecrypt(self.AESGCMKey, lengthTitle, self.kvs[lengthTitle], None)
-      
-      length = int.from_bytes(byteLength, 'little')
-      note = self.unpad(paddedNote, length)
-      noteString = note.decode('ascii')
+      note = self.unpad(paddedNote) # Unpad the value, returning the data to its original length.
+      noteString = note.decode('ascii') # Convert the value from a byte array to a string.
       return noteString # Return the note value corresponding to the HMAC'd title.
     return None # Return nothing if the key value pair corresponding to the HMAC'd title does not exist.
 
@@ -219,19 +220,9 @@ class PrivNotes:
     if len(note) > self.MAX_NOTE_LEN: # Check the length of the note to make sure that it does not exceed the note length bounds.
       raise ValueError('Maximum note length exceeded') # Raise an value error, telling the user that their message is too long.
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
-
-    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
-
-    byteData = bytes(note, 'ascii')
-    byteLength = (len(byteData)).to_bytes(2048, 'little')
-
-    GCMlength = self.AESGCMEncrypt(self.AESGCMKey, lengthTitle, byteLength, None)
-    self.kvs[lengthTitle] = GCMlength
-
-    paddedNote = self.pad(note)
-
+    byteData = bytes(note, 'ascii') # Convert the note to a byte array.
+    paddedNote = self.pad(byteData) # Pad the note, ensuring that all notes are the same length, preventing an adversary from discerning messages based on their length.s
     GCMnote = self.AESGCMEncrypt(self.AESGCMKey, hmacTitle, paddedNote, hmacTitle) # Encrypt the note under AES-GCM. Use the HMAC'd title as the nonce (since it is non-repeating) and the additional data (to protect against swap attacks)
-    # print("AES-GCM Length: {} \n".format(len(GCMnote))) * D E B U G * Used to check the length of the ciphertexts, to ensure that the padding works.
     self.kvs[hmacTitle] = GCMnote # Add a new key value pair to the kvs, where the hmac of the supplied title corresponds to the supplied note.
 
   """
@@ -248,9 +239,7 @@ class PrivNotes:
   """
   def remove(self, title):
     hmacTitle = self.runHMAC(self.HMACKey, bytes(title, 'ascii')) # Run HMAC on the title.
-    lengthTitle = self.runHMAC(self.AESGCMKey, self.runSHA256(bytes(title, 'ascii')))
     if hmacTitle in self.kvs: # Check to see if the HMAC'd title exists in the kvs.
       del self.kvs[hmacTitle] # Delete the key value pair corresponding to the HMAC'd title.
-      del self.kvs[lengthTitle] # Delete the key value pair corresponding to the HMAC'd title.
       return True # Return true, denoting that the title was successfully removed.
     return False # Otherwise return false, denoting that the title was not found in the kvs.
